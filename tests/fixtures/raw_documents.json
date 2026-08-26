@@ -1,0 +1,28 @@
+[
+  {
+    "document_id": "A/2026/QH",
+    "title": "Luật minh họa đang có hiệu lực",
+    "document_type": "Luật",
+    "issuing_agency": "Quốc hội",
+    "issued_date": "2026-06-15",
+    "effective_date": "2026-07-01",
+    "expiration_date": null,
+    "crawl_status": "stale",
+    "source_url": "https://example.test/van-ban/A-2026-QH",
+    "raw_html": "<html><body><h1>Luật minh họa đang có hiệu lực</h1><p>Điều 1. Nội dung đang áp dụng.</p></body></html>",
+    "content": "Điều 1. Nội dung đang áp dụng."
+  },
+  {
+    "document_id": "B/2027/ND",
+    "title": "Nghị định minh họa chưa có hiệu lực",
+    "document_type": "Nghị định",
+    "issuing_agency": "Chính phủ",
+    "issued_date": "2026-12-20",
+    "effective_date": "2027-01-01",
+    "expiration_date": null,
+    "crawl_status": "fresh",
+    "source_url": "https://example.test/van-ban/B-2027-ND",
+    "raw_html": "<html><body><h1>Nghị định minh họa chưa có hiệu lực</h1><p>Điều 1. Nội dung áp dụng từ năm 2027.</p></body></html>",
+    "content": "Điều 1. Nội dung áp dụng từ năm 2027."
+  }
+]

@@ -1,0 +1,13 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.4.1+cu121
+sentence-transformers
+transformers>=4.44,<5
+faiss-gpu
+pandas
+pyarrow
+beautifulsoup4
+rank-bm25
+pyvi
+ollama
+tqdm
+pytest
