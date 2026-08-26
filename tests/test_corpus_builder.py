@@ -67,6 +67,19 @@ def test_select_effective_documents_requires_exact_source_schema_and_dates():
         select_effective_documents(invalid_date, as_of="2026-08-27")
 
 
+@pytest.mark.parametrize("invalid_date", ["2026-7-1", "2026-07-1", "2026-7-01"])
+def test_select_effective_documents_rejects_non_zero_padded_dates(invalid_date):
+    """Catches date parsing that accepts non-canonical ISO date spellings."""
+    from src.parser.corpus_builder import select_effective_documents
+
+    with pytest.raises(CorpusValidationError, match=rf"effFrom.*{invalid_date}"):
+        select_effective_documents(
+            pd.DataFrame([document(effFrom=invalid_date)]), as_of="2026-08-27"
+        )
+    with pytest.raises(CorpusValidationError, match=rf"as_of.*{invalid_date}"):
+        select_effective_documents(pd.DataFrame([document()]), as_of=invalid_date)
+
+
 def test_article_chunker_emits_canonical_article_and_clause_metadata():
     """Catches chunking that loses citation metadata or merges separately numbered clauses."""
     from src.parser.corpus_builder import ArticleChunker
@@ -132,6 +145,44 @@ def test_article_chunker_splits_long_content_with_bounded_overlap():
     assert all(0 < len(chunk.content.split()) <= 390 for chunk in chunks)
     assert chunks[0].content.split()[-40:] == chunks[1].content.split()[:40]
     assert chunks[1].content.split()[-40:] == chunks[2].content.split()[:40]
+
+
+def test_article_chunker_prefers_complete_paragraph_boundaries_before_words():
+    """Catches a packer that splits a new paragraph merely to fill remaining capacity."""
+    from src.parser.corpus_builder import ArticleChunker
+
+    first_paragraph = " ".join(f"paragraph_one_{number:03d}" for number in range(200))
+    second_paragraph = " ".join(f"paragraph_two_{number:03d}" for number in range(200))
+    html = (
+        "<article><p>Article 1. Paragraph ordering</p>"
+        f"<p>{first_paragraph}</p><p>{second_paragraph}</p></article>"
+    )
+
+    chunks = ArticleChunker().chunk_document(pd.Series(document(html_content=html)))
+
+    assert len(chunks) == 2
+    assert "paragraph_two_000" not in chunks[0].content
+    assert chunks[0].content.split()[-1] == "paragraph_one_199"
+    assert chunks[1].content.split()[40] == "paragraph_two_000"
+
+
+def test_article_chunker_prefers_complete_sentence_boundaries_before_words():
+    """Catches a packer that word-splits a sentence when its paragraph exceeds the limit."""
+    from src.parser.corpus_builder import ArticleChunker
+
+    first_sentence = " ".join(f"sentence_one_{number:03d}" for number in range(200)) + "."
+    second_sentence = " ".join(f"sentence_two_{number:03d}" for number in range(200)) + "."
+    html = (
+        "<article><p>Article 1. Sentence ordering</p>"
+        f"<p>{first_sentence} {second_sentence}</p></article>"
+    )
+
+    chunks = ArticleChunker().chunk_document(pd.Series(document(html_content=html)))
+
+    assert len(chunks) == 2
+    assert "sentence_two_000" not in chunks[0].content
+    assert chunks[0].content.split()[-1] == "sentence_one_199."
+    assert chunks[1].content.split()[40] == "sentence_two_000"
 
 
 def test_build_effective_corpus_writes_hashed_json_and_manifest(tmp_path):

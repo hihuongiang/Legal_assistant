@@ -136,3 +136,55 @@ The test-only `.pytest-tmp` directory was removed after verification.
   `Điều` headings. Documents whose legal text uses another article-heading
   convention now fail explicitly instead of generating an empty corpus; adding
   another convention should be accompanied by a fixture and test.
+
+## Review fix round
+
+### Finding 1: exact ISO dates
+
+`datetime.strptime(..., "%Y-%m-%d")` accepts non-zero-padded components on
+this platform. A parameterized behavior test was added before the fix and
+exercised `effFrom` and `as_of` independently for `2026-7-1`, `2026-07-1`,
+and `2026-7-01`.
+
+```text
+$ python -m pytest tests/test_corpus_builder.py -q --basetemp=.pytest-tmp
+..FFF....FF..                                                            [100%]
+E       Failed: DID NOT RAISE CorpusValidationError
+5 failed, 8 passed in 2.57s
+```
+
+`_parse_iso_date` now requires a full-match against `\d{4}-\d{2}-\d{2}` before
+calling `strptime`, so calendar validation still comes from the standard date
+parser while representation validation is exact.
+
+### Finding 2: ordered chunk boundaries
+
+Two public `ArticleChunker` tests were added first. The paragraph test uses two
+200-word paragraphs that could fit only by splitting the second one; the
+sentence test uses one 400-word paragraph made of two complete 200-word
+sentences. Both assert the next boundary unit is wholly deferred to the next
+chunk (after the 40-word overlap).
+
+The same RED run above showed the current packer placed
+`paragraph_two_000` and `sentence_two_000` in the preceding chunks. The packer
+now preserves any complete paragraph or sentence that is at most 350 words,
+starting a new core chunk when it does not fit. It breaks at word boundaries
+only when that individual unit itself exceeds 350 words.
+
+### GREEN and verification
+
+```text
+$ python -m pytest tests/test_corpus_builder.py -q --basetemp=.pytest-tmp
+.............                                                            [100%]
+13 passed in 1.97s
+
+$ python -m pytest -q --basetemp=.pytest-tmp
+..................                                                       [100%]
+18 passed in 2.35s
+
+$ python -m compileall -q src\parser\corpus_builder.py main_build_corpus.py
+# exit 0
+```
+
+The test-only `.pytest-tmp` directory will be removed before committing. The
+change remains limited to the builder, its behavior tests, and this report.

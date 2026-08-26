@@ -34,7 +34,7 @@ MAX_PERSISTED_WORDS = MAX_CONTENT_WORDS + OVERLAP_WORDS
 
 
 def _parse_iso_date(value: object, field_name: str) -> date:
-    if not isinstance(value, str):
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
         raise CorpusValidationError(f"{field_name} must use YYYY-MM-DD, got {value!r}")
     try:
         return datetime.strptime(value, "%Y-%m-%d").date()
@@ -113,7 +113,7 @@ def _html_lines(html_content: str) -> list[str]:
 
 
 def _content_units(lines: list[str]) -> list[str]:
-    """Create paragraph and sentence units, deferring word breaks to the packer."""
+    """Create complete paragraph units, then sentences for oversize paragraphs."""
     units: list[str] = []
     for line in lines:
         if len(line.split()) <= MAX_CONTENT_WORDS:
@@ -135,6 +135,15 @@ def _split_content(lines: list[str]) -> list[str]:
     current_word_count = 0
     for unit in units:
         unit_words = unit.split()
+        if len(unit_words) <= MAX_CONTENT_WORDS:
+            if current and current_word_count + len(unit_words) > MAX_CONTENT_WORDS:
+                core_chunks.append(current)
+                current = []
+                current_word_count = 0
+            current.extend(unit_words)
+            current_word_count += len(unit_words)
+            continue
+
         while unit_words:
             available_words = MAX_CONTENT_WORDS - current_word_count
             current.extend(unit_words[:available_words])
