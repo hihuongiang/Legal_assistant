@@ -89,3 +89,63 @@ Output:
   it is not introduced by this tooling-only task.
 - The current offline suite contains one project-contract test; later tasks
   should add behavior-level corpus-build tests that consume this fixture.
+
+## Fix round 1: review findings
+
+### Root cause and changes
+
+The original fixture used normalized, invented field names instead of the
+Parquet schema consumed by the corpus pipeline, and `.gitignore` did not list
+the observed generated legacy artifacts. The fixture now uses `docs_code`,
+`docs_title`, `source_url`, `issue_date`, `effFrom`, `status`, and
+`html_content`. The stale row has `status` `Chưa có hiệu lực` and `effFrom`
+`2026-07-01`; the future row has `effFrom` `2027-01-01`.
+
+The project-contract test now asserts every required field and those exact
+edge values. It also runs `git check-ignore` to require `.ai-log` and each
+legacy index/chunk artifact to be ignored while requiring
+`data/Legal_Docs_Full_Raw_HTML.parquet` to remain visible to Git.
+
+### RED
+
+Command:
+
+```powershell
+pytest tests/test_project_contract.py -q
+```
+
+Output before the corrected fixture and ignore rules:
+
+```text
+FAILED tests/test_project_contract.py::test_raw_document_fixture_and_readme_contract
+AssertionError: required Parquet fields were absent
+FAILED tests/test_project_contract.py::test_gitignore_keeps_raw_parquet_and_ignores_legacy_generated_artifacts
+AssertionError: [0, 1, 1, 1, 1, 1] != [0, 0, 0, 0, 0, 0]
+2 failed in 0.58s
+```
+
+### GREEN and full verification
+
+Focused command:
+
+```powershell
+pytest tests/test_project_contract.py -q
+```
+
+Output:
+
+```text
+2 passed in 0.44s
+```
+
+Full command:
+
+```powershell
+pytest -q
+```
+
+Output:
+
+```text
+2 passed in 0.35s
+```

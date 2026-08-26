@@ -1,8 +1,14 @@
 .venv/
+.ai-log/
 __pycache__/
 .pytest_cache/
 *.py[cod]
 data/processed/
+data/faiss_index.bin
+data/faiss_metadata.pkl
+data/legal_chunks_v3.json
+data/master_chunks.json
+data/master_chunks.jsonl
 results.json
 submission.zip
 *.log

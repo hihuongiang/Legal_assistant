@@ -1,28 +1,20 @@
 [
   {
-    "document_id": "A/2026/QH",
-    "title": "Luật minh họa đang có hiệu lực",
-    "document_type": "Luật",
-    "issuing_agency": "Quốc hội",
-    "issued_date": "2026-06-15",
-    "effective_date": "2026-07-01",
-    "expiration_date": null,
-    "crawl_status": "stale",
+    "docs_code": "A/2026/QH",
+    "docs_title": "Current legal document fixture",
     "source_url": "https://example.test/van-ban/A-2026-QH",
-    "raw_html": "<html><body><h1>Luật minh họa đang có hiệu lực</h1><p>Điều 1. Nội dung đang áp dụng.</p></body></html>",
-    "content": "Điều 1. Nội dung đang áp dụng."
+    "issue_date": "2026-06-15",
+    "effFrom": "2026-07-01",
+    "status": "Ch\u01b0a c\u00f3 hi\u1ec7u l\u1ef1c",
+    "html_content": "<html><body><h1>Current legal document fixture</h1><p>Article 1. Effective content.</p></body></html>"
   },
   {
-    "document_id": "B/2027/ND",
-    "title": "Nghị định minh họa chưa có hiệu lực",
-    "document_type": "Nghị định",
-    "issuing_agency": "Chính phủ",
-    "issued_date": "2026-12-20",
-    "effective_date": "2027-01-01",
-    "expiration_date": null,
-    "crawl_status": "fresh",
+    "docs_code": "B/2027/ND",
+    "docs_title": "Future legal document fixture",
     "source_url": "https://example.test/van-ban/B-2027-ND",
-    "raw_html": "<html><body><h1>Nghị định minh họa chưa có hiệu lực</h1><p>Điều 1. Nội dung áp dụng từ năm 2027.</p></body></html>",
-    "content": "Điều 1. Nội dung áp dụng từ năm 2027."
+    "issue_date": "2026-12-20",
+    "effFrom": "2027-01-01",
+    "status": "Ch\u01b0a c\u00f3 hi\u1ec7u l\u1ef1c",
+    "html_content": "<html><body><h1>Future legal document fixture</h1><p>Article 1. Effective in 2027.</p></body></html>"
   }
 ]
