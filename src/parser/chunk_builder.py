@@ -1,59 +1,32 @@
-from dataclasses import dataclass, asdict
-from typing import List
+"""Loading helpers for the canonical legal chunk representation."""
+
 import json
+from pathlib import Path
+
+from src.parser.models import CorpusValidationError, LegalChunk
 
 
-@dataclass
-class LegalChunk:
-    chunk_id: str
-    law_id: str
-    law_name: str
-    effective_date: str
-    article_name: str
-    clause_name: str
-    content: str
-    amends: str = ""
+def load_chunks(path: str | Path) -> list[LegalChunk]:
+    """Load a canonical JSON chunk list and validate its IDs and metadata."""
+    try:
+        with Path(path).open("r", encoding="utf-8") as file:
+            records = json.load(file)
+    except json.JSONDecodeError as error:
+        raise CorpusValidationError("chunk corpus must contain valid JSON") from error
 
+    if not isinstance(records, list):
+        raise CorpusValidationError("chunk corpus must be a JSON list")
 
-def load_chunks(filepath: str) -> List[LegalChunk]:
-    """
-    Đọc file JSON chứa danh sách chunk.
-
-    Input:
-        filepath: đường dẫn tới file json
-
-    Output:
-        List[LegalChunk]
-    """
-
-    with open(filepath, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    chunks = []
-
-    for item in data:
-        chunk = LegalChunk(
-            chunk_id=item["chunk_id"],
-            law_id=item["law_id"],
-            law_name=item["law_name"],
-            effective_date=item.get("effective_date", ""),
-            article_name=item["article_name"],
-            clause_name=item["clause_name"],
-            content=item["content"],
-            amends=item.get("amends", "")
-        )
-
+    chunks: list[LegalChunk] = []
+    indexes_by_id: dict[str, int] = {}
+    for record_index, record in enumerate(records):
+        chunk = LegalChunk.from_dict(record, record_index)
+        first_index = indexes_by_id.get(chunk.chunk_id)
+        if first_index is not None:
+            raise CorpusValidationError(
+                f"duplicate chunk_id '{chunk.chunk_id}' at records {first_index} and {record_index}"
+            )
+        indexes_by_id[chunk.chunk_id] = record_index
         chunks.append(chunk)
 
     return chunks
-
-
-def save_chunks(chunks: List[LegalChunk], filepath: str) -> None:
-    """
-    Lưu List[LegalChunk] thành file JSON.
-    """
-
-    data = [asdict(chunk) for chunk in chunks]
-
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
