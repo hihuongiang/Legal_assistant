@@ -21,9 +21,11 @@ def test_raw_document_fixture_and_readme_contract(raw_document_frame: pd.DataFra
 
     assert expected_fields <= set(raw_document_frame.columns)
     assert raw_document_frame["docs_code"].tolist() == ["A/2026/QH", "B/2027/ND"]
-    assert raw_document_frame.loc[0, "status"] == "Chưa có hiệu lực"
-    assert raw_document_frame.loc[0, "effFrom"] == "2026-07-01"
-    assert raw_document_frame.loc[1, "effFrom"] == "2027-01-01"
+    policy_inputs = raw_document_frame.set_index("docs_code")
+    assert policy_inputs.loc["A/2026/QH", "status"] == "Chưa có hiệu lực"
+    assert policy_inputs.loc["A/2026/QH", "effFrom"] == "2026-07-01"
+    assert policy_inputs.loc["B/2027/ND", "status"] == "Chưa có hiệu lực"
+    assert policy_inputs.loc["B/2027/ND", "effFrom"] == "2027-01-01"
     assert "main_build_corpus.py --as-of 2026-08-27" in (ROOT / "README.md").read_text(encoding="utf-8")
 
 

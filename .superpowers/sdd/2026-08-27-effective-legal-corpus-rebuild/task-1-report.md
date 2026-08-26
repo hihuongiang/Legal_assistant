@@ -149,3 +149,61 @@ Output:
 ```text
 2 passed in 0.35s
 ```
+
+## Fix round 2: explicit policy-input assertions
+
+The contract now indexes the source-schema fixture by `docs_code` and asserts
+both policy-input rows explicitly:
+
+- `A/2026/QH`: `status` is `Chưa có hiệu lực`; `effFrom` is `2026-07-01`.
+- `B/2027/ND`: `status` is `Chưa có hiệu lực`; `effFrom` is `2027-01-01`.
+
+These are fixture inputs only. No effective-date selection behavior is tested
+or implemented here; that logic remains scoped to Task 3.
+
+### Mutation evidence
+
+After adding the B-specific assertion, a controlled temporary mutation changed
+only B's status to `Đã có hiệu lực`.
+
+Command:
+
+```powershell
+pytest tests/test_project_contract.py -q
+```
+
+Output:
+
+```text
+FAILED tests/test_project_contract.py::test_raw_document_fixture_and_readme_contract
+AssertionError: assert 'Đã có hiệu lực' == 'Chưa có hiệu lực'
+1 failed, 1 passed in 0.59s
+```
+
+The fixture was restored to `Chưa có hiệu lực` before final verification.
+
+### Final verification
+
+Focused command:
+
+```powershell
+pytest tests/test_project_contract.py -q
+```
+
+Output:
+
+```text
+2 passed in 0.39s
+```
+
+Full command:
+
+```powershell
+pytest -q
+```
+
+Output:
+
+```text
+2 passed in 0.48s
+```
