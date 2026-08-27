@@ -55,7 +55,7 @@ def test_select_effective_documents_filters_statuses_dates_and_deduplicates():
 
 
 def test_select_effective_documents_requires_exact_source_schema_and_dates():
-    """Catches raw rows that silently bypass required metadata or use ambiguous effective dates."""
+    """Catches raw rows that silently bypass required metadata or use invalid effective dates."""
     from src.parser.corpus_builder import select_effective_documents
 
     missing_source_url = pd.DataFrame([document()]).drop(columns=["source_url"])
@@ -65,6 +65,39 @@ def test_select_effective_documents_requires_exact_source_schema_and_dates():
     invalid_date = pd.DataFrame([document(effFrom="2026/07/01")])
     with pytest.raises(CorpusValidationError, match="effFrom.*2026/07/01"):
         select_effective_documents(invalid_date, as_of="2026-08-27")
+
+
+def test_year_only_effective_date_is_included_only_after_its_interval():
+    """Catches treating an uncertain year as effective on an invented first day."""
+    from src.parser.corpus_builder import select_effective_documents
+
+    frame = pd.DataFrame([document(docs_code="YEAR", effFrom="2025")])
+
+    assert select_effective_documents(frame, as_of="2024-12-31").empty
+    assert select_effective_documents(frame, as_of="2026-01-01")["docs_code"].tolist() == ["YEAR"]
+
+
+def test_year_only_effective_date_rejects_an_as_of_date_inside_its_interval():
+    """Catches silently deciding eligibility when a supplied date falls within a year-only value."""
+    from src.parser.corpus_builder import select_effective_documents
+
+    with pytest.raises(CorpusValidationError, match="as_of falls inside year-only effFrom interval"):
+        select_effective_documents(
+            pd.DataFrame([document(effFrom="2025")]), as_of="2025-08-27"
+        )
+
+
+def test_year_only_effective_date_is_preserved_in_generated_chunks(tmp_path):
+    """Catches normalization that loses the raw year-only legal effective-date value."""
+    from src.parser.corpus_builder import build_effective_corpus
+
+    source = tmp_path / "raw.parquet"
+    pd.DataFrame([document(effFrom="2025")]).to_parquet(source)
+
+    build_effective_corpus(source, tmp_path / "output", as_of="2026-08-27")
+
+    records = json.loads((tmp_path / "output" / "effective_legal_chunks.json").read_text(encoding="utf-8"))
+    assert {record["effective_date"] for record in records} == {"2025"}
 
 
 @pytest.mark.parametrize("invalid_date", ["2026-7-1", "2026-07-1", "2026-7-01"])

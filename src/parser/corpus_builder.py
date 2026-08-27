@@ -44,6 +44,21 @@ def _parse_iso_date(value: object, field_name: str) -> date:
         ) from error
 
 
+def _parse_effective_interval(value: object, field_name: str) -> tuple[date, date]:
+    """Return the known effective-date interval without inventing a day for year-only input."""
+    if isinstance(value, str) and re.fullmatch(r"\d{4}", value):
+        try:
+            year = int(value)
+            return date(year, 1, 1), date(year, 12, 31)
+        except ValueError as error:
+            raise CorpusValidationError(
+                f"{field_name} must use YYYY or YYYY-MM-DD, got {value!r}"
+            ) from error
+
+    exact_date = _parse_iso_date(value, field_name)
+    return exact_date, exact_date
+
+
 def _parse_as_of(as_of: str | date) -> date:
     if isinstance(as_of, datetime):
         return as_of.date()
@@ -63,13 +78,28 @@ def select_effective_documents(frame: pd.DataFrame, as_of: str | date) -> pd.Dat
     effective_as_of = _parse_as_of(as_of)
     selected = frame.copy().reset_index(drop=True)
     selected["_source_order"] = range(len(selected))
-    parsed_dates = [
-        _parse_iso_date(value, f"effFrom at source row {index}")
+    effective_intervals = [
+        _parse_effective_interval(value, f"effFrom at source row {index}")
         for index, value in selected["effFrom"].items()
     ]
-    selected["_effective_date"] = parsed_dates
+    ambiguous_row = next(
+        (
+            index
+            for index, (start, end) in enumerate(effective_intervals)
+            if start != end and start <= effective_as_of <= end
+        ),
+        None,
+    )
+    if ambiguous_row is not None:
+        raise CorpusValidationError(
+            "as_of falls inside year-only effFrom interval "
+            f"at source row {ambiguous_row}: {selected.at[ambiguous_row, 'effFrom']!r}"
+        )
+
+    selected["_effective_start"] = [start for start, _ in effective_intervals]
+    selected["_effective_end"] = [end for _, end in effective_intervals]
     eligible = selected[
-        (selected["_effective_date"] <= effective_as_of)
+        (selected["_effective_end"] <= effective_as_of)
         & ~selected["status"].isin(EXCLUDED_STATUSES)
     ].copy()
 
@@ -83,7 +113,13 @@ def select_effective_documents(frame: pd.DataFrame, as_of: str | date) -> pd.Dat
     )
     winners = ranked.drop_duplicates(subset=["docs_code"], keep="first")
     return winners.sort_values("_source_order", kind="stable").drop(
-        columns=["_source_order", "_effective_date", "_has_html", "_html_length"]
+        columns=[
+            "_source_order",
+            "_effective_start",
+            "_effective_end",
+            "_has_html",
+            "_html_length",
+        ]
     ).reset_index(drop=True)
 
 
@@ -183,7 +219,7 @@ class ArticleChunker:
         law_name = _required_row_text(row, "docs_title")
         source_url = _required_row_text(row, "source_url")
         effective_date = _required_row_text(row, "effFrom")
-        _parse_iso_date(effective_date, "effFrom")
+        _parse_effective_interval(effective_date, "effFrom")
         status = _required_row_text(row, "status")
         html_content = _required_row_text(row, "html_content")
 
