@@ -158,3 +158,14 @@ It could not load `BAAI/bge-m3`: the environment denied network access to
 before writing `effective_legal.faiss` or its index manifest. The post-index
 smoke test was therefore not run. Legacy root-level artifacts were untouched;
 generated `data/processed` outputs remain uncommitted.
+
+## Post-review audit follow-up (2026-08-27)
+
+Commit `38dcaa8` made selection accounting fully reconcilable and rebuilt the
+same corpus hash. Its manifest records 3,044 raw rows, 3,025 eligible rows, 17
+unknown-date exclusions, two future-date exclusions, zero inactive-status
+exclusions, 55 duplicate-version exclusions, and 2,970 selected documents.
+Fresh verification then passed `70` tests with the two pre-existing FAISS SWIG
+deprecation warnings. The project virtual environment was repaired with
+PyArrow 22.0.0, Transformers 4.46.3, Fsspec 2026.4.0, and pytest installed;
+`pip check` passed without broken requirements.

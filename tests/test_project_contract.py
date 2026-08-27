@@ -45,6 +45,16 @@ def test_index_build_documentation_uses_current_cli_options():
         assert expected_command in document.read_text(encoding="utf-8")
 
 
+def test_requirements_pin_the_windows_embedding_runtime_dependencies():
+    """Prevents an unconstrained PyArrow upgrade from breaking CUDA index startup."""
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+
+    assert "pyarrow==22.0.0" in requirements
+    assert "transformers==4.46.3" in requirements
+    assert "fsspec[http]==2026.4.0" in requirements
+    assert "faiss-cpu==1.14.3" in requirements
+
+
 def test_gitignore_keeps_raw_parquet_and_ignores_legacy_generated_artifacts():
     """Catches rules that hide the raw source or retain generated artifacts."""
     ignored_paths = [
