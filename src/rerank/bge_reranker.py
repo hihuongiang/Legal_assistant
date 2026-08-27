@@ -20,12 +20,16 @@ class BGEReranker:
         """Load the cross encoder exclusively on CUDA in FP16."""
         del use_fp16  # CUDA FP16 is mandatory for bounded model execution.
         require_cuda()
-        self.model = CrossEncoder(
-            model_name,
-            max_length=CUDA_SEQUENCE_LIMIT,
-            device="cuda",
-        )
-        self.model.model.half()
+        try:
+            self.model = CrossEncoder(
+                model_name,
+                max_length=CUDA_SEQUENCE_LIMIT,
+                device="cuda",
+            )
+            self.model.model.half()
+        except torch.OutOfMemoryError as error:
+            release_cuda_model(self)
+            raise GpuMemoryError("rerank", CUDA_BATCH_SIZE, CUDA_SEQUENCE_LIMIT) from error
 
     def rerank(
         self,

@@ -23,3 +23,14 @@ a 512-token limit, and batch size 1. Torch OOM exceptions become
 `GpuMemoryError` with operation and limits. Both `close()` methods are
 idempotent and release the model reference, synchronize where available, and
 empty CUDA cache.
+
+## P1 constructor OOM follow-up
+
+- **RED:** mocked `SentenceTransformer` and `CrossEncoder` constructors raised
+  `torch.OutOfMemoryError`; both raw errors escaped (2 failures).
+- **GREEN:** constructors now release partial CUDA state and raise
+  `GpuMemoryError` with the correct operation, batch size, and sequence limit.
+  `python -m pytest tests/test_gpu_runtime.py -q` → **10 passed, 2 warnings**
+  in 31.83s (third-party SWIG deprecation warnings only).
+- **Full:** with `TEMP` and `TMP` redirected to `.pytest-tmp`, `python -m
+  pytest -q` → **41 passed, 2 warnings** in 34.67s.

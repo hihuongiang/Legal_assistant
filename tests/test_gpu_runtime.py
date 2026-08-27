@@ -45,6 +45,40 @@ def test_oom_reports_bounded_operation_context():
     assert "sequence_limit=512" in str(error)
 
 
+@pytest.mark.parametrize(
+    ("module_path", "class_name", "constructor_name", "operation"),
+    [
+        ("src.embedding.dense_model", "DenseEmbedder", "SentenceTransformer", "embed"),
+        ("src.rerank.bge_reranker", "BGEReranker", "CrossEncoder", "rerank"),
+    ],
+)
+def test_model_constructor_translates_torch_oom_and_releases_partial_cuda_state(
+    monkeypatch, module_path, class_name, constructor_name, operation
+):
+    """Catches raw constructor OOMs and abandoned allocations before inference starts."""
+    runtime = _gpu_runtime()
+    module = importlib.import_module(module_path)
+    synchronize_calls = []
+    empty_cache_calls = []
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: synchronize_calls.append(True))
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: empty_cache_calls.append(True))
+    monkeypatch.setattr(
+        module,
+        constructor_name,
+        lambda *args, **kwargs: (_ for _ in ()).throw(torch.OutOfMemoryError("oom")),
+    )
+
+    with pytest.raises(runtime.GpuMemoryError) as error:
+        getattr(module, class_name)("offline-model")
+
+    assert error.value.operation == operation
+    assert error.value.batch_size == 1
+    assert error.value.sequence_limit == 512
+    assert synchronize_calls == [True]
+    assert empty_cache_calls == [True]
+
+
 class _DenseModel:
     def __init__(self):
         self.max_seq_length = None

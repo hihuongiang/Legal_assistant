@@ -23,9 +23,13 @@ class DenseEmbedder:
             raise ValueError("DenseEmbedder supports CUDA execution only.")
 
         self.model_name = model_name
-        self.model = SentenceTransformer(model_name, device="cuda")
-        self.model.max_seq_length = CUDA_SEQUENCE_LIMIT
-        self.model.half()
+        try:
+            self.model = SentenceTransformer(model_name, device="cuda")
+            self.model.max_seq_length = CUDA_SEQUENCE_LIMIT
+            self.model.half()
+        except torch.OutOfMemoryError as error:
+            release_cuda_model(self)
+            raise GpuMemoryError("embed", CUDA_BATCH_SIZE, CUDA_SEQUENCE_LIMIT) from error
 
     def encode(
         self,
