@@ -13,6 +13,8 @@ class DenseEmbedder:
         Load BGE-M3 model.
         """
 
+        self.model_name = model_name
+
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
