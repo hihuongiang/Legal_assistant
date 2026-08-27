@@ -29,6 +29,22 @@ def test_raw_document_fixture_and_readme_contract(raw_document_frame: pd.DataFra
     assert "main_build_corpus.py --as-of 2026-08-27" in (ROOT / "README.md").read_text(encoding="utf-8")
 
 
+def test_index_build_documentation_uses_current_cli_options():
+    """Keeps operational docs aligned with main_build_index's argparse API."""
+    expected_command = (
+        "main_build_index.py --chunks data/processed/effective_legal_chunks.json "
+        "--index data/processed/effective_legal_chunks.faiss "
+        "--manifest data/processed/effective_legal_chunks.manifest.json "
+        "--corpus-manifest data/processed/effective_legal_corpus.manifest.json"
+    )
+
+    for document in (
+        ROOT / "README.md",
+        ROOT / "docs" / "superpowers" / "plans" / "2026-08-27-effective-legal-corpus-rebuild.md",
+    ):
+        assert expected_command in document.read_text(encoding="utf-8")
+
+
 def test_gitignore_keeps_raw_parquet_and_ignores_legacy_generated_artifacts():
     """Catches rules that hide the raw source or retain generated artifacts."""
     ignored_paths = [

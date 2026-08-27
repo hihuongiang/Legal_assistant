@@ -363,7 +363,7 @@
 
   First ensure Ollama has no resident GPU model. Run:
 
-    .venv\Scripts\python.exe main_build_index.py --corpus data/processed/effective_legal_chunks.json --output-dir data/processed
+    .venv\Scripts\python.exe main_build_index.py --chunks data/processed/effective_legal_chunks.json --index data/processed/effective_legal_chunks.faiss --manifest data/processed/effective_legal_chunks.manifest.json --corpus-manifest data/processed/effective_legal_corpus.manifest.json
 
   Expected: batch-size-1 FP16 build completes; vector count equals manifest ID count.
 
@@ -390,4 +390,3 @@
 - Tasks 5–6 make the 4 GB CUDA path explicit and safe.
 - Task 7 repairs citation/output failures.
 - Tasks 1 and 8 provide reproducibility and verification.
-

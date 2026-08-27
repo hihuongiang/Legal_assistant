@@ -25,7 +25,7 @@ python main_build_corpus.py --as-of 2026-08-27
 After the corpus is available, create or refresh the retrieval index.
 
 ```powershell
-python main_build_index.py
+python main_build_index.py --chunks data/processed/effective_legal_chunks.json --index data/processed/effective_legal_chunks.faiss --manifest data/processed/effective_legal_chunks.manifest.json --corpus-manifest data/processed/effective_legal_corpus.manifest.json
 ```
 
 ## Run tests
