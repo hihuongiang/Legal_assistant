@@ -11,8 +11,10 @@ Date: 2026-08-27
   - Added interval eligibility for `effFrom` values expressed as `YYYY`.
   - Added TDD coverage and corrected the README record after the retry.
 
-Only source, tests, and README files were committed. This report is left
-uncommitted. No generated `data/processed` content was committed.
+Only source, tests, and README files were committed; this report is committed
+as their audit record. No generated `data/processed` content was committed.
+Commands 1–13 below are the historical pre-completion attempts, superseded by
+the final completion record.
 
 ## Commands and observed output
 
@@ -99,7 +101,7 @@ uncommitted. No generated `data/processed` content was committed.
     Result: exit 1, `Evaluation failed: [Errno 2] No such file or directory:
     'data\\processed\\effective_legal_chunks.json'`.
 
-## Artifact and runtime disposition
+## Final artifact and runtime disposition
 
 The authorized year-only policy was implemented without inventing an exact
 day: `YYYY` is treated as `[YYYY-01-01, YYYY-12-31]`. A row is included only
@@ -108,11 +110,10 @@ and causes a `CorpusValidationError` when `as_of` lies inside the interval.
 The raw value remains `LegalChunk.effective_date`.
 
 The remaining 17 empty effective dates have no authorized or defensible
-interval, so the corpus builder correctly stops before writing either output
-file. Consequently there is no generated count, hash, manifest, or index to
-validate. In accordance with the instruction to proceed only after a successful
-corpus build, no Ollama residency check, CUDA index build, or post-policy smoke
-test was attempted. No partial result exists.
+interval, so they are excluded and counted as `unknown legal effective date`.
+The completed production build is recorded below. Generated corpus artifacts
+exist locally and remain uncommitted; the separate FAISS index still requires a
+stable embedding environment.
 
 Legacy root-level artifact SHA-256 values were inspected, not overwritten:
 
@@ -121,15 +122,6 @@ Legacy root-level artifact SHA-256 values were inspected, not overwritten:
 - `data/legal_chunks_v3.json`: `A6E1A084B056B628CBC1759EB357AA168F9F58AC96310389DFCF84B099846A95`
 - `data/master_chunks.json`: `19D6C3484D05427849557F93AA76CAF3AAA0D9D9720E3E5CE502F67B26A65BF3`
 - `data/master_chunks.jsonl`: `AF3246549E29B905A4FF59B4AA0BF34006143C36820A4CDC79D30322BCCEEE2A`
-
-## Blockers
-
-1. The raw production source contains 17 empty `effFrom` fields. A policy for
-   those values is required before a legally safe corpus can be built.
-2. The documented project virtual environment cannot run pytest because
-   pytest is not installed. The offline suite was run with host Python 3.13.1
-   and a workspace-local pytest temporary directory because the sandbox cannot
-   write to the host system temporary directory.
 
 ## Task 8 completion addendum (2026-08-27)
 

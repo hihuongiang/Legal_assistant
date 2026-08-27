@@ -61,10 +61,15 @@ class CorpusBuildManifest:
 
     as_of_date: str
     source_sha256: str
+    raw_document_count: int
+    eligible_document_count: int
     document_count: int
     chunk_count: int
     excluded_missing_effective_date_count: int
     excluded_missing_effective_date_reason: str
+    excluded_future_effective_date_count: int
+    excluded_inactive_status_count: int
+    excluded_duplicate_document_count: int
     fallback_document_count: int
     fallback_chunk_count: int
     duplicate_clause_occurrence_count: int

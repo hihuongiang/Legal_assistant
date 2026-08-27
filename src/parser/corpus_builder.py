@@ -77,6 +77,41 @@ def count_missing_effective_dates(frame: pd.DataFrame) -> int:
     return sum(_has_missing_effective_date(value) for value in frame["effFrom"])
 
 
+def _selection_audit_counts(frame: pd.DataFrame, as_of: date) -> dict[str, int]:
+    """Classify each raw row once so the persisted manifest reconciles its input."""
+    missing_mask = frame["effFrom"].map(_has_missing_effective_date)
+    nonmissing = frame.loc[~missing_mask]
+    effective_intervals = {
+        index: _parse_effective_interval(value, f"effFrom at source row {index}")
+        for index, value in nonmissing["effFrom"].items()
+    }
+    ambiguous_row = next(
+        (
+            index
+            for index, (start, end) in effective_intervals.items()
+            if start != end and start <= as_of <= end
+        ),
+        None,
+    )
+    if ambiguous_row is not None:
+        raise CorpusValidationError(
+            "as_of falls inside year-only effFrom interval "
+            f"at source row {ambiguous_row}: {nonmissing.at[ambiguous_row, 'effFrom']!r}"
+        )
+
+    future_mask = nonmissing.index.to_series().map(
+        lambda index: effective_intervals[index][1] > as_of
+    )
+    inactive_mask = ~future_mask & nonmissing["status"].isin(EXCLUDED_STATUSES)
+    return {
+        "raw_document_count": len(frame),
+        "excluded_missing_effective_date_count": int(missing_mask.sum()),
+        "excluded_future_effective_date_count": int(future_mask.sum()),
+        "excluded_inactive_status_count": int(inactive_mask.sum()),
+        "eligible_document_count": int((~future_mask & ~inactive_mask).sum()),
+    }
+
+
 def count_duplicate_clause_occurrences(chunks: list[LegalChunk]) -> int:
     """Count repeated clause occurrences once even when one is split into multiple chunks."""
     occurrence_ids = {
@@ -457,8 +492,16 @@ def build_effective_corpus(
     source_bytes = source_path.read_bytes()
     effective_as_of = _parse_as_of(as_of)
     raw_documents = pd.read_parquet(source_path)
-    missing_effective_date_count = count_missing_effective_dates(raw_documents)
+    missing_fields = [field for field in REQUIRED_SOURCE_FIELDS if field not in raw_documents.columns]
+    if missing_fields:
+        raise CorpusValidationError(
+            f"raw source is missing required field(s): {', '.join(missing_fields)}"
+        )
+    audit_counts = _selection_audit_counts(raw_documents, effective_as_of)
     documents = select_effective_documents(raw_documents, effective_as_of)
+    audit_counts["excluded_duplicate_document_count"] = (
+        audit_counts["eligible_document_count"] - len(documents)
+    )
     chunker = ArticleChunker()
     chunks: list[LegalChunk] = []
     fallback_document_count = 0
@@ -486,10 +529,15 @@ def build_effective_corpus(
     manifest = CorpusBuildManifest(
         as_of_date=effective_as_of.isoformat(),
         source_sha256=hashlib.sha256(source_bytes).hexdigest(),
+        raw_document_count=audit_counts["raw_document_count"],
+        eligible_document_count=audit_counts["eligible_document_count"],
         document_count=len(documents),
         chunk_count=len(chunks),
-        excluded_missing_effective_date_count=missing_effective_date_count,
+        excluded_missing_effective_date_count=audit_counts["excluded_missing_effective_date_count"],
         excluded_missing_effective_date_reason=MISSING_EFFECTIVE_DATE_REASON,
+        excluded_future_effective_date_count=audit_counts["excluded_future_effective_date_count"],
+        excluded_inactive_status_count=audit_counts["excluded_inactive_status_count"],
+        excluded_duplicate_document_count=audit_counts["excluded_duplicate_document_count"],
         fallback_document_count=fallback_document_count,
         fallback_chunk_count=fallback_chunk_count,
         duplicate_clause_occurrence_count=duplicate_clause_occurrence_count,

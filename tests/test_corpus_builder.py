@@ -126,6 +126,43 @@ def test_build_excludes_unknown_effective_dates_and_records_the_reason(
     assert persisted_manifest["excluded_missing_effective_date_reason"] == "unknown legal effective date"
 
 
+def test_build_manifest_reconciles_all_raw_document_selection_outcomes(tmp_path):
+    """Catches a manifest that cannot reconcile raw rows to the final corpus."""
+    from src.parser.corpus_builder import build_effective_corpus
+
+    source = tmp_path / "raw.parquet"
+    pd.DataFrame(
+        [
+            document(docs_code="KEEP"),
+            document(docs_code="DUPLICATE", html_content="<p>short</p>"),
+            document(docs_code="DUPLICATE", html_content="<p>longest retained duplicate</p>"),
+            document(docs_code="UNKNOWN", effFrom=""),
+            document(docs_code="FUTURE", effFrom="2026-09-01"),
+            document(docs_code="EXPIRED", status="Hết hiệu lực"),
+        ]
+    ).to_parquet(source)
+
+    manifest = build_effective_corpus(source, tmp_path / "output", as_of="2026-08-27")
+
+    assert manifest.raw_document_count == 6
+    assert manifest.eligible_document_count == 3
+    assert manifest.excluded_missing_effective_date_count == 1
+    assert manifest.excluded_future_effective_date_count == 1
+    assert manifest.excluded_inactive_status_count == 1
+    assert manifest.excluded_duplicate_document_count == 1
+    assert manifest.document_count == 2
+    assert (
+        manifest.excluded_missing_effective_date_count
+        + manifest.excluded_future_effective_date_count
+        + manifest.excluded_inactive_status_count
+        + manifest.eligible_document_count
+        == manifest.raw_document_count
+    )
+    assert manifest.eligible_document_count == (
+        manifest.excluded_duplicate_document_count + manifest.document_count
+    )
+
+
 def test_select_effective_documents_requires_exact_source_schema_and_dates():
     """Catches raw rows that silently bypass required metadata or use invalid effective dates."""
     from src.parser.corpus_builder import select_effective_documents
