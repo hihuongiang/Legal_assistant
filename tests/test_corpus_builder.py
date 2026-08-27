@@ -30,6 +30,56 @@ def document(**overrides: object) -> dict[str, object]:
     return row
 
 
+@pytest.fixture
+def documents_with_missing_effective_date() -> pd.DataFrame:
+    """Raw rows that distinguish an unknown date from a future or stale status."""
+    return pd.DataFrame(
+        [
+            document(docs_code="INCLUDED"),
+            document(docs_code="UNKNOWN", effFrom="", status="active"),
+        ]
+    )
+
+
+@pytest.fixture
+def section_only_document() -> dict[str, object]:
+    """An effective document with prose sections but no canonical Article heading."""
+    return document(
+        docs_code="SECTION-ONLY",
+        html_content=(
+            "<article><p>PHẦN I. QUY ĐỊNH CHUNG</p>"
+            "<p>Nội dung toàn văn không có tiêu đề Điều được đánh số.</p></article>"
+        ),
+    )
+
+
+@pytest.fixture
+def duplicate_clause_document() -> dict[str, object]:
+    """A legal article whose embedded amendment repeats a canonical clause number."""
+    return document(
+        docs_code="DUPLICATE-CLAUSE",
+        html_content=(
+            "<article><p>Article 4. Amending provisions</p>"
+            "<p>1. First top-level clause.</p><p>1. Embedded amended clause.</p>"
+            "<p>2. Unchanged clause.</p></article>"
+        ),
+    )
+
+
+@pytest.fixture
+def duplicate_article_document() -> dict[str, object]:
+    """A crawled document that repeats one canonical article and its clauses."""
+    return document(
+        docs_code="DUPLICATE-ARTICLE",
+        html_content=(
+            "<article><p>Article 4. Amending provisions</p>"
+            "<p>1. First article occurrence.</p></article>"
+            "<article><p>Article 4. Amending provisions (repeated)</p>"
+            "<p>1. Second article occurrence.</p></article>"
+        ),
+    )
+
+
 def test_select_effective_documents_filters_statuses_dates_and_deduplicates():
     """Catches an eligibility filter that drops pending-but-effective laws or keeps invalid duplicates."""
     from src.parser.corpus_builder import select_effective_documents
@@ -52,6 +102,28 @@ def test_select_effective_documents_filters_statuses_dates_and_deduplicates():
     assert selected["docs_code"].tolist() == ["KEEP"]
     assert selected.iloc[0]["html_content"] == "<p>the longest retained version</p>"
     assert selected.iloc[0]["status"] == "Chưa có hiệu lực"
+
+
+def test_build_excludes_unknown_effective_dates_and_records_the_reason(
+    tmp_path, documents_with_missing_effective_date
+):
+    """Catches inferring an empty legal date or losing its auditable exclusion count."""
+    from src.parser.corpus_builder import build_effective_corpus
+
+    source = tmp_path / "raw.parquet"
+    documents_with_missing_effective_date.to_parquet(source)
+
+    manifest = build_effective_corpus(source, tmp_path / "output", as_of="2026-08-27")
+
+    records = json.loads((tmp_path / "output" / "effective_legal_chunks.json").read_text(encoding="utf-8"))
+    persisted_manifest = json.loads(
+        (tmp_path / "output" / "effective_legal_corpus.manifest.json").read_text(encoding="utf-8")
+    )
+    assert {record["law_id"] for record in records} == {"INCLUDED"}
+    assert manifest.excluded_missing_effective_date_count == 1
+    assert manifest.excluded_missing_effective_date_reason == "unknown legal effective date"
+    assert persisted_manifest["excluded_missing_effective_date_count"] == 1
+    assert persisted_manifest["excluded_missing_effective_date_reason"] == "unknown legal effective date"
 
 
 def test_select_effective_documents_requires_exact_source_schema_and_dates():
@@ -134,6 +206,53 @@ def test_article_chunker_emits_canonical_article_and_clause_metadata():
     assert chunks[1].clause_name == "Clause 2"
 
 
+def test_article_chunker_falls_back_to_bounded_full_document_chunks(section_only_document):
+    """Catches fabricated Article numbers or rejected effective documents without Article headings."""
+    from src.parser.corpus_builder import ArticleChunker
+
+    chunks = ArticleChunker().chunk_document(pd.Series(section_only_document))
+
+    assert [chunk.chunk_id for chunk in chunks] == ["SECTION-ONLY_FULL_P1"]
+    assert chunks[0].article_name == "Toàn văn"
+    assert chunks[0].clause_name == ""
+    assert "Nội dung toàn văn" in chunks[0].content
+    assert 0 < len(chunks[0].content.split()) <= 390
+
+
+def test_article_chunker_suffixes_repeated_clause_occurrences_deterministically(
+    duplicate_clause_document,
+):
+    """Catches duplicate canonical IDs or occurrence suffixes that alter ordinary clauses."""
+    from src.parser.corpus_builder import ArticleChunker
+
+    chunks = ArticleChunker().chunk_document(pd.Series(duplicate_clause_document))
+
+    assert [chunk.chunk_id for chunk in chunks] == [
+        "DUPLICATE-CLAUSE_D4_K1",
+        "DUPLICATE-CLAUSE_D4_K1_O2",
+        "DUPLICATE-CLAUSE_D4_K2",
+    ]
+    assert [chunk.clause_name for chunk in chunks] == ["Clause 1", "Clause 1", "Clause 2"]
+    assert "First top-level clause" in chunks[0].content
+    assert "Embedded amended clause" in chunks[1].content
+
+
+def test_article_chunker_suffixes_repeated_article_clause_occurrences(
+    duplicate_article_document,
+):
+    """Catches duplicate IDs when a crawl repeats an entire canonical article."""
+    from src.parser.corpus_builder import ArticleChunker
+
+    chunks = ArticleChunker().chunk_document(pd.Series(duplicate_article_document))
+
+    assert [chunk.chunk_id for chunk in chunks] == [
+        "DUPLICATE-ARTICLE_D4_K1",
+        "DUPLICATE-ARTICLE_D4_K1_O2",
+    ]
+    assert "First article occurrence" in chunks[0].content
+    assert "Second article occurrence" in chunks[1].content
+
+
 def test_article_chunker_stops_after_thirty_adjacent_numeric_table_lines():
     """Catches the counter reset that lets numeric table tails leak into legal article content."""
     from src.parser.corpus_builder import ArticleChunker
@@ -151,13 +270,13 @@ def test_article_chunker_stops_after_thirty_adjacent_numeric_table_lines():
     assert "Text after the table" not in chunks[0].content
 
 
-def test_article_chunker_rejects_html_that_produces_no_legal_chunks():
-    """Catches a parser that silently writes a document without usable legal content."""
+def test_article_chunker_rejects_html_that_produces_no_chunkable_content():
+    """Catches a fallback that silently writes a document without usable legal content."""
     from src.parser.corpus_builder import ArticleChunker
 
-    with pytest.raises(CorpusValidationError, match="no article chunks"):
+    with pytest.raises(CorpusValidationError, match="no chunkable content"):
         ArticleChunker().chunk_document(
-            pd.Series(document(html_content="<article><p>Unstructured crawl text only.</p></article>"))
+            pd.Series(document(html_content="<article><p>   </p></article>"))
         )
 
 
@@ -241,6 +360,57 @@ def test_build_effective_corpus_writes_hashed_json_and_manifest(tmp_path):
     assert not list((tmp_path / "output").glob("*.tmp"))
 
 
+def test_build_records_full_document_fallback_counts(tmp_path, section_only_document):
+    """Catches a corpus manifest that omits auditable non-Article fallback usage."""
+    from src.parser.corpus_builder import build_effective_corpus
+
+    source = tmp_path / "raw.parquet"
+    pd.DataFrame([section_only_document]).to_parquet(source)
+
+    manifest = build_effective_corpus(source, tmp_path / "output", as_of="2026-08-27")
+
+    assert manifest.fallback_document_count == 1
+    assert manifest.fallback_chunk_count == 1
+
+
+def test_build_records_duplicate_clause_occurrence_count(tmp_path, duplicate_clause_document):
+    """Catches a manifest that cannot disclose preserved repeated clause occurrences."""
+    from src.parser.corpus_builder import build_effective_corpus
+
+    source = tmp_path / "raw.parquet"
+    pd.DataFrame([duplicate_clause_document]).to_parquet(source)
+
+    manifest = build_effective_corpus(source, tmp_path / "output", as_of="2026-08-27")
+
+    assert manifest.duplicate_clause_occurrence_count == 1
+
+
+def test_build_suffixes_duplicate_normalized_document_clause_ids(tmp_path):
+    """Catches normalized IDs colliding across raw document-code spellings."""
+    from src.parser.corpus_builder import build_effective_corpus
+
+    source = tmp_path / "raw.parquet"
+    pd.DataFrame(
+        [
+            document(docs_code="98/2013/TT-BTC"),
+            document(docs_code="98/2013/TT- BTC"),
+        ]
+    ).to_parquet(source)
+
+    manifest = build_effective_corpus(source, tmp_path / "output", as_of="2026-08-27")
+
+    records = json.loads(
+        (tmp_path / "output" / "effective_legal_chunks.json").read_text(encoding="utf-8")
+    )
+    assert [record["chunk_id"] for record in records] == [
+        "98-2013-TT-BTC_D1_K1",
+        "98-2013-TT-BTC_D1_K2",
+        "98-2013-TT-BTC_D1_K1_O2",
+        "98-2013-TT-BTC_D1_K2_O2",
+    ]
+    assert manifest.duplicate_clause_occurrence_count == 2
+
+
 def test_build_corpus_cli_reports_counts_and_rejects_invalid_dates(tmp_path):
     """Catches a CLI that hides build counts or exits successfully after invalid user input."""
     source = tmp_path / "raw.parquet"
@@ -265,3 +435,80 @@ def test_build_corpus_cli_reports_counts_and_rejects_invalid_dates(tmp_path):
     assert "1 effective documents and 2 chunks" in successful.stdout
     assert invalid_date.returncode != 0
     assert "as_of must use YYYY-MM-DD" in invalid_date.stderr
+
+
+def test_build_corpus_cli_reports_unknown_effective_date_exclusions(tmp_path):
+    """Catches a successful build that hides excluded unknown legal dates from operators."""
+    source = tmp_path / "raw.parquet"
+    pd.DataFrame([document(), document(docs_code="UNKNOWN", effFrom="")]).to_parquet(source)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).parents[1] / "main_build_corpus.py"),
+            "--source",
+            str(source),
+            "--output-dir",
+            str(tmp_path / "output"),
+            "--as-of",
+            "2026-08-27",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert "Excluded 1 documents: unknown legal effective date." in completed.stdout
+
+
+def test_build_corpus_cli_reports_full_document_fallback_counts(tmp_path, section_only_document):
+    """Catches CLI output that hides Article-less fallback corpus coverage."""
+    source = tmp_path / "raw.parquet"
+    pd.DataFrame([section_only_document]).to_parquet(source)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).parents[1] / "main_build_corpus.py"),
+            "--source",
+            str(source),
+            "--output-dir",
+            str(tmp_path / "output"),
+            "--as-of",
+            "2026-08-27",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert "Fallback chunked 1 documents into 1 chunks without canonical Article headings." in completed.stdout
+
+
+def test_build_corpus_cli_reports_duplicate_clause_occurrence_counts(
+    tmp_path, duplicate_clause_document
+):
+    """Catches CLI output that hides preserved repeated legal clauses."""
+    source = tmp_path / "raw.parquet"
+    pd.DataFrame([duplicate_clause_document]).to_parquet(source)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).parents[1] / "main_build_corpus.py"),
+            "--source",
+            str(source),
+            "--output-dir",
+            str(tmp_path / "output"),
+            "--as-of",
+            "2026-08-27",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert "Recorded 1 duplicate clause occurrences with deterministic occurrence suffixes." in completed.stdout

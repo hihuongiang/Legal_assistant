@@ -23,6 +23,21 @@ def main(argv: list[str] | None = None) -> int:
         f"Built {manifest.document_count} effective documents and {manifest.chunk_count} chunks "
         f"as of {manifest.as_of_date}."
     )
+    print(
+        "Excluded "
+        f"{manifest.excluded_missing_effective_date_count} documents: "
+        f"{manifest.excluded_missing_effective_date_reason}."
+    )
+    print(
+        "Fallback chunked "
+        f"{manifest.fallback_document_count} documents into "
+        f"{manifest.fallback_chunk_count} chunks without canonical Article headings."
+    )
+    print(
+        "Recorded "
+        f"{manifest.duplicate_clause_occurrence_count} duplicate clause occurrences "
+        "with deterministic occurrence suffixes."
+    )
     return 0
 
 

@@ -63,6 +63,11 @@ class CorpusBuildManifest:
     source_sha256: str
     document_count: int
     chunk_count: int
+    excluded_missing_effective_date_count: int
+    excluded_missing_effective_date_reason: str
+    fallback_document_count: int
+    fallback_chunk_count: int
+    duplicate_clause_occurrence_count: int
     corpus_sha256: str
 
     def to_dict(self) -> dict[str, str | int]:

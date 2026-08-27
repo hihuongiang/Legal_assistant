@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import date, datetime
 import hashlib
 import json
@@ -31,6 +31,8 @@ EXCLUDED_STATUSES = {"Hết hiệu lực", "Bị bãi bỏ", "Ngưng hiệu lự
 MAX_CONTENT_WORDS = 350
 OVERLAP_WORDS = 40
 MAX_PERSISTED_WORDS = MAX_CONTENT_WORDS + OVERLAP_WORDS
+MISSING_EFFECTIVE_DATE_REASON = "unknown legal effective date"
+DUPLICATE_CLAUSE_OCCURRENCE_PATTERN = re.compile(r"_O\d+(?:_P\d+)?$")
 
 
 def _parse_iso_date(value: object, field_name: str) -> date:
@@ -59,6 +61,62 @@ def _parse_effective_interval(value: object, field_name: str) -> tuple[date, dat
     return exact_date, exact_date
 
 
+def _has_missing_effective_date(value: object) -> bool:
+    """Return whether the raw source provides no legal effective-date value."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    return bool(pd.isna(value))
+
+
+def count_missing_effective_dates(frame: pd.DataFrame) -> int:
+    """Count source records excluded because their legal effective date is unknown."""
+    if "effFrom" not in frame.columns:
+        return 0
+    return sum(_has_missing_effective_date(value) for value in frame["effFrom"])
+
+
+def count_duplicate_clause_occurrences(chunks: list[LegalChunk]) -> int:
+    """Count repeated clause occurrences once even when one is split into multiple chunks."""
+    occurrence_ids = {
+        re.sub(r"_P\d+$", "", chunk.chunk_id)
+        for chunk in chunks
+        if DUPLICATE_CLAUSE_OCCURRENCE_PATTERN.search(chunk.chunk_id)
+    }
+    return len(occurrence_ids)
+
+
+def _chunk_id_occurrence_parts(chunk_id: str) -> tuple[str, str, str]:
+    """Return canonical base, source occurrence base, and split-part suffix."""
+    part_match = re.search(r"_P\d+$", chunk_id)
+    part_suffix = part_match.group(0) if part_match else ""
+    source_base = chunk_id[: -len(part_suffix)] if part_suffix else chunk_id
+    canonical_base = re.sub(r"_O\d+$", "", source_base)
+    return canonical_base, source_base, part_suffix
+
+
+def _suffix_duplicate_chunk_ids(
+    chunks: list[LegalChunk], occurrence_counts: dict[str, int]
+) -> tuple[list[LegalChunk], int]:
+    """Make normalized IDs unique while preserving source order and split parts."""
+    source_occurrences: dict[str, int] = {}
+    duplicate_clause_count = 0
+    suffixed: list[LegalChunk] = []
+    for chunk in chunks:
+        canonical_base, source_base, part_suffix = _chunk_id_occurrence_parts(chunk.chunk_id)
+        if source_base not in source_occurrences:
+            occurrence = occurrence_counts.get(canonical_base, 0) + 1
+            occurrence_counts[canonical_base] = occurrence
+            source_occurrences[source_base] = occurrence
+            if occurrence > 1 and re.search(r"_D\d+_K\d+$", canonical_base):
+                duplicate_clause_count += 1
+        occurrence = source_occurrences[source_base]
+        occurrence_suffix = f"_O{occurrence}" if occurrence > 1 else ""
+        suffixed.append(replace(chunk, chunk_id=f"{canonical_base}{occurrence_suffix}{part_suffix}"))
+    return suffixed, duplicate_clause_count
+
+
 def _parse_as_of(as_of: str | date) -> date:
     if isinstance(as_of, datetime):
         return as_of.date()
@@ -78,14 +136,17 @@ def select_effective_documents(frame: pd.DataFrame, as_of: str | date) -> pd.Dat
     effective_as_of = _parse_as_of(as_of)
     selected = frame.copy().reset_index(drop=True)
     selected["_source_order"] = range(len(selected))
-    effective_intervals = [
-        _parse_effective_interval(value, f"effFrom at source row {index}")
+    selected = selected.loc[
+        ~selected["effFrom"].map(_has_missing_effective_date)
+    ].copy()
+    effective_intervals = {
+        index: _parse_effective_interval(value, f"effFrom at source row {index}")
         for index, value in selected["effFrom"].items()
-    ]
+    }
     ambiguous_row = next(
         (
             index
-            for index, (start, end) in enumerate(effective_intervals)
+            for index, (start, end) in effective_intervals.items()
             if start != end and start <= effective_as_of <= end
         ),
         None,
@@ -96,8 +157,12 @@ def select_effective_documents(frame: pd.DataFrame, as_of: str | date) -> pd.Dat
             f"at source row {ambiguous_row}: {selected.at[ambiguous_row, 'effFrom']!r}"
         )
 
-    selected["_effective_start"] = [start for start, _ in effective_intervals]
-    selected["_effective_end"] = [end for _, end in effective_intervals]
+    selected["_effective_start"] = [
+        effective_intervals[index][0] for index in selected.index
+    ]
+    selected["_effective_end"] = [
+        effective_intervals[index][1] for index in selected.index
+    ]
     eligible = selected[
         (selected["_effective_end"] <= effective_as_of)
         & ~selected["status"].isin(EXCLUDED_STATUSES)
@@ -223,10 +288,11 @@ class ArticleChunker:
         status = _required_row_text(row, "status")
         html_content = _required_row_text(row, "html_content")
 
+        document_lines = _html_lines(html_content)
         articles: list[tuple[int, list[str]]] = []
         current_article: int | None = None
         current_lines: list[str] = []
-        for line in _html_lines(html_content):
+        for line in document_lines:
             match = self.article_pattern.match(line)
             if match:
                 if current_article is not None:
@@ -238,9 +304,18 @@ class ArticleChunker:
         if current_article is not None:
             articles.append((current_article, current_lines))
         if not articles:
-            raise CorpusValidationError("document produced no article chunks")
+            return self._chunk_full_document(
+                doc_id=doc_id,
+                doc_code=doc_code,
+                law_name=law_name,
+                source_url=source_url,
+                effective_date=effective_date,
+                status=status,
+                lines=document_lines,
+            )
 
         chunks: list[LegalChunk] = []
+        clause_occurrences: dict[tuple[int, int], int] = {}
         for article_number, article_lines in articles:
             chunks.extend(
                 self._chunk_article(
@@ -252,6 +327,7 @@ class ArticleChunker:
                     status=status,
                     article_number=article_number,
                     lines=article_lines,
+                    clause_occurrences=clause_occurrences,
                 )
             )
 
@@ -259,6 +335,36 @@ class ArticleChunker:
         if duplicate_ids:
             raise CorpusValidationError(f"duplicate chunk IDs: {', '.join(sorted(duplicate_ids))}")
         return chunks
+
+    def _chunk_full_document(
+        self,
+        *,
+        doc_id: str,
+        doc_code: str,
+        law_name: str,
+        source_url: str,
+        effective_date: str,
+        status: str,
+        lines: list[str],
+    ) -> list[LegalChunk]:
+        """Chunk an effective document with no canonical article headings without inventing one."""
+        parts = _split_content(lines)
+        if not parts:
+            raise CorpusValidationError("document produced no chunkable content")
+        return [
+            LegalChunk(
+                chunk_id=f"{doc_id}_FULL_P{part_number}",
+                law_id=doc_code,
+                law_name=law_name,
+                article_name="Toàn văn",
+                clause_name="",
+                effective_date=effective_date,
+                status=status,
+                source_url=source_url,
+                content=content,
+            )
+            for part_number, content in enumerate(parts, start=1)
+        ]
 
     def _chunk_article(
         self,
@@ -271,6 +377,7 @@ class ArticleChunker:
         status: str,
         article_number: int,
         lines: list[str],
+        clause_occurrences: dict[tuple[int, int], int],
     ) -> list[LegalChunk]:
         article_name = lines[0]
         header_lines = [lines[0]]
@@ -306,7 +413,11 @@ class ArticleChunker:
             parts = _split_content(clause_lines)
             if not parts:
                 continue
-            base_id = f"{doc_id}_D{article_number}_K{clause_number}"
+            occurrence_key = (article_number, clause_number)
+            occurrence = clause_occurrences.get(occurrence_key, 0) + 1
+            clause_occurrences[occurrence_key] = occurrence
+            occurrence_suffix = f"_O{occurrence}" if occurrence > 1 else ""
+            base_id = f"{doc_id}_D{article_number}_K{clause_number}{occurrence_suffix}"
             for part_number, content in enumerate(parts, start=1):
                 suffix = f"_P{part_number}" if len(parts) > 1 else ""
                 chunks.append(
@@ -345,9 +456,26 @@ def build_effective_corpus(
     source_path = Path(source)
     source_bytes = source_path.read_bytes()
     effective_as_of = _parse_as_of(as_of)
-    documents = select_effective_documents(pd.read_parquet(source_path), effective_as_of)
+    raw_documents = pd.read_parquet(source_path)
+    missing_effective_date_count = count_missing_effective_dates(raw_documents)
+    documents = select_effective_documents(raw_documents, effective_as_of)
     chunker = ArticleChunker()
-    chunks = [chunk for _, row in documents.iterrows() for chunk in chunker.chunk_document(row)]
+    chunks: list[LegalChunk] = []
+    fallback_document_count = 0
+    fallback_chunk_count = 0
+    duplicate_clause_occurrence_count = 0
+    occurrence_counts: dict[str, int] = {}
+    for _, row in documents.iterrows():
+        document_chunks = chunker.chunk_document(row)
+        document_chunks, duplicate_count = _suffix_duplicate_chunk_ids(
+            document_chunks, occurrence_counts
+        )
+        fallback_chunks = [chunk for chunk in document_chunks if "_FULL_P" in chunk.chunk_id]
+        if fallback_chunks:
+            fallback_document_count += 1
+            fallback_chunk_count += len(fallback_chunks)
+        duplicate_clause_occurrence_count += duplicate_count
+        chunks.extend(document_chunks)
     chunk_ids = [chunk.chunk_id for chunk in chunks]
     if len(chunk_ids) != len(set(chunk_ids)):
         raise CorpusValidationError("duplicate chunk IDs in effective corpus")
@@ -360,6 +488,11 @@ def build_effective_corpus(
         source_sha256=hashlib.sha256(source_bytes).hexdigest(),
         document_count=len(documents),
         chunk_count=len(chunks),
+        excluded_missing_effective_date_count=missing_effective_date_count,
+        excluded_missing_effective_date_reason=MISSING_EFFECTIVE_DATE_REASON,
+        fallback_document_count=fallback_document_count,
+        fallback_chunk_count=fallback_chunk_count,
+        duplicate_clause_occurrence_count=duplicate_clause_occurrence_count,
         corpus_sha256=hashlib.sha256(chunk_content).hexdigest(),
     )
     output_path = Path(output_dir)

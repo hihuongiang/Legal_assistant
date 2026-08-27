@@ -51,15 +51,16 @@ The raw Parquet source was inspected before the production build: it contains
 two 2027 rows that should be excluded for the requested date. The builder
 accepts 21 year-only `effFrom` values as uncertain calendar-year intervals;
 it includes them only after the year and preserves their raw value in chunks.
-The build did not produce a corpus or index because 17 source rows have an
-empty `effFrom` value (the first is source row 255, `58-TC/TCT`). An empty
-date has no safe effective-date interval, so the corpus contract rejects it
-before writing `data/processed`; there is no generated chunk count,
-fingerprint, or FAISS manifest to report.
+The build excludes 17 source rows with an empty `effFrom` value (the first is
+source row 255, `58-TC/TCT`) as an auditable `unknown legal effective date`
+case. As of `2026-08-27`, it produced 2,970 effective documents and 150,267
+unique chunks. The corpus SHA-256 begins `a7907733779f22ef`; 589 documents
+used the bounded `Toàn văn` fallback (6,572 chunks), and 29,756 repeated
+canonical clause occurrences received deterministic occurrence suffixes.
 
 CUDA indexing remains configured for one FP16 embedding at a time, with batch
-size 1 and a 512-token limit. It must be run only after the raw-date quality
-issue is resolved and the corpus build succeeds. The offline test suite passed
-with 57 tests and one expected generated-artifact skip using a workspace-local
-pytest temporary directory; the project virtual environment needs `pytest`
-installed before it can run the documented test command.
+size 1 and a 512-token limit. The offline suite passed with 68 tests and two
+pre-existing FAISS SWIG deprecation warnings using a workspace-local pytest
+temporary directory. Index generation was attempted with CUDA available and
+no resident Ollama model, but could not load `BAAI/bge-m3` because the
+environment denied Hugging Face network access; no index artifact was written.
