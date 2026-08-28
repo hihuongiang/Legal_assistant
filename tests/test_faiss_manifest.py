@@ -100,6 +100,61 @@ def test_faiss_store_loads_a_manifest_bound_index_and_searches(tmp_path):
     assert loaded_store.search("first provision", top_k=1) == [("LAW-1-A", 1.0)]
 
 
+def test_faiss_store_resumes_from_a_corpus_bound_checkpoint(tmp_path):
+    """Catches a restarted GPU build that re-embeds completed chunks or mixes corpora."""
+    from src.retrieval.faiss_store import FaissStore
+
+    class InterruptingEmbedder(FakeEmbedder):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def encode_chunks(self, texts: list[str]) -> np.ndarray:
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("simulated interrupted build")
+            return super().encode_chunks(texts)
+
+    class RecordingEmbedder(FakeEmbedder):
+        def __init__(self):
+            super().__init__()
+            self.encoded_batches: list[list[str]] = []
+
+        def encode_chunks(self, texts: list[str]) -> np.ndarray:
+            self.encoded_batches.append(texts)
+            return super().encode_chunks(texts)
+
+    checkpoint_path = tmp_path / "effective_legal_chunks.partial.faiss"
+    chunks = fixture_chunks()
+    with pytest.raises(RuntimeError, match="simulated interrupted build"):
+        FaissStore(InterruptingEmbedder()).build_index(
+            chunks,
+            batch_size=1,
+            checkpoint_path=checkpoint_path,
+            checkpoint_every_batches=1,
+        )
+
+    resumed_embedder = RecordingEmbedder()
+    resumed_store = FaissStore(resumed_embedder)
+    resumed_store.build_index(
+        chunks,
+        batch_size=1,
+        checkpoint_path=checkpoint_path,
+        checkpoint_every_batches=1,
+    )
+    resumed_store.save(
+        tmp_path / "effective_legal_chunks.faiss",
+        tmp_path / "effective_legal_chunks.manifest.json",
+        chunks,
+        as_of_date="2026-08-27",
+    )
+
+    assert resumed_embedder.encoded_batches == [["second provision"]]
+    assert resumed_store.chunk_ids == ["LAW-1-A", "LAW-1-B"]
+    assert not checkpoint_path.exists()
+    assert not checkpoint_path.with_suffix(".manifest.json").exists()
+
+
 def built_index_paths(tmp_path):
     from src.retrieval.faiss_store import FaissStore
 
@@ -231,6 +286,34 @@ def test_build_index_uses_processed_defaults_and_corpus_build_as_of(tmp_path, mo
     manifest = IndexManifest.read(tmp_path / "data" / "processed" / "effective_legal_chunks.manifest.json")
     assert manifest.as_of_date == "2026-08-27"
     assert (tmp_path / "data" / "processed" / "effective_legal_chunks.faiss").is_file()
+
+
+def test_build_index_passes_a_processed_resume_checkpoint_to_the_store(tmp_path, monkeypatch):
+    """Catches a resumable store that the production CLI never actually enables."""
+    import main_build_index
+
+    captured: dict[str, object] = {}
+
+    class CheckpointStore:
+        def __init__(self, embedder):
+            del embedder
+
+        def build_index(self, chunks, **kwargs):
+            captured["chunks"] = chunks
+            captured.update(kwargs)
+
+        def save(self, *args, **kwargs):
+            del args, kwargs
+
+    write_processed_corpus(tmp_path, fixture_chunks())
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main_build_index, "DenseEmbedder", FakeEmbedder)
+    monkeypatch.setattr(main_build_index, "FaissStore", CheckpointStore)
+
+    assert main_build_index.main([]) == 0
+
+    assert captured["checkpoint_path"] == main_build_index.DEFAULT_CHECKPOINT_PATH
+    assert captured["checkpoint_every_batches"] == 64
 
 
 def test_build_index_rejects_non_processed_paths_without_an_explicit_override(capsys):

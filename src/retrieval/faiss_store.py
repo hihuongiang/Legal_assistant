@@ -1,5 +1,8 @@
 import faiss
+import json
 import numpy as np
+import os
+from pathlib import Path
 from tqdm import tqdm
 from typing import Protocol
 
@@ -34,6 +37,7 @@ class FaissStore:
         self.index = self._new_index()
 
         self.chunk_ids = []
+        self._checkpoint_paths: tuple[Path, Path] | None = None
 
     def _new_index(self):
         return faiss.IndexFlatIP(self.embedding_dim)
@@ -51,10 +55,79 @@ class FaissStore:
         if len(chunk_ids) != len(set(chunk_ids)):
             raise IndexValidationError(f"duplicate chunk IDs in {source}")
 
+    def _checkpoint_manifest_path(self, checkpoint_path: Path) -> Path:
+        return checkpoint_path.with_suffix(".manifest.json")
+
+    def _checkpoint_payload(self, chunks: list[LegalChunk]) -> dict[str, object]:
+        return {
+            "corpus_sha256": corpus_fingerprint(chunks),
+            "model_name": self.model_name,
+            "embedding_dimension": self.embedding_dim,
+            "vector_count": self.index.ntotal,
+        }
+
+    def _write_checkpoint(self, checkpoint_path: Path, chunks: list[LegalChunk]) -> None:
+        manifest_path = self._checkpoint_manifest_path(checkpoint_path)
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        index_temporary_path = checkpoint_path.with_suffix(checkpoint_path.suffix + ".tmp")
+        manifest_temporary_path = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+        try:
+            faiss.write_index(self.index, str(index_temporary_path))
+            manifest_temporary_path.write_text(
+                json.dumps(self._checkpoint_payload(chunks), ensure_ascii=False), encoding="utf-8"
+            )
+            os.replace(index_temporary_path, checkpoint_path)
+            os.replace(manifest_temporary_path, manifest_path)
+        finally:
+            for temporary_path in (index_temporary_path, manifest_temporary_path):
+                if temporary_path.exists():
+                    temporary_path.unlink()
+
+    def _resume_checkpoint(self, checkpoint_path: Path, chunks: list[LegalChunk]) -> int:
+        manifest_path = self._checkpoint_manifest_path(checkpoint_path)
+        if not checkpoint_path.exists() and not manifest_path.exists():
+            self.index = self._new_index()
+            self.chunk_ids = []
+            return 0
+        if not checkpoint_path.exists() or not manifest_path.exists():
+            raise IndexValidationError("FAISS checkpoint and its manifest must both exist")
+        try:
+            checkpoint = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise IndexValidationError("FAISS checkpoint manifest must be valid UTF-8 JSON") from error
+
+        expected = self._checkpoint_payload(chunks)
+        if not isinstance(checkpoint, dict) or any(
+            checkpoint.get(field) != expected[field]
+            for field in ("corpus_sha256", "model_name", "embedding_dimension")
+        ):
+            raise IndexValidationError("FAISS checkpoint does not match the active corpus or model")
+        vector_count = checkpoint.get("vector_count")
+        if not isinstance(vector_count, int) or not 0 <= vector_count <= len(chunks):
+            raise IndexValidationError("FAISS checkpoint has an invalid vector count")
+
+        loaded_index = faiss.read_index(str(checkpoint_path))
+        if loaded_index.ntotal != vector_count or loaded_index.d != self.embedding_dim:
+            raise IndexValidationError("FAISS checkpoint index does not match its manifest")
+        self.index = loaded_index
+        self.chunk_ids = [chunk.chunk_id for chunk in chunks[:vector_count]]
+        return vector_count
+
+    def _remove_checkpoint(self) -> None:
+        if self._checkpoint_paths is None:
+            return
+        for checkpoint_path in self._checkpoint_paths:
+            if checkpoint_path.exists():
+                checkpoint_path.unlink()
+        self._checkpoint_paths = None
+
     def build_index(
         self,
         chunks: list[LegalChunk],
-        batch_size: int = 32
+        batch_size: int = 32,
+        *,
+        checkpoint_path: str | Path | None = None,
+        checkpoint_every_batches: int = 64,
     ) -> None:
         """
         Build FAISS index theo từng batch để tránh OOM.
@@ -62,12 +135,26 @@ class FaissStore:
 
         chunk_ids = [chunk.chunk_id for chunk in chunks]
         self._validate_unique_chunk_ids(chunk_ids, "chunk corpus")
-        self.index = self._new_index()
-        self.chunk_ids = []
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        if checkpoint_every_batches < 1:
+            raise ValueError("checkpoint_every_batches must be positive")
+        if checkpoint_path is None:
+            self.index = self._new_index()
+            self.chunk_ids = []
+            self._checkpoint_paths = None
+        else:
+            persisted_checkpoint_path = Path(checkpoint_path)
+            self._checkpoint_paths = (
+                persisted_checkpoint_path,
+                self._checkpoint_manifest_path(persisted_checkpoint_path),
+            )
+            self._resume_checkpoint(persisted_checkpoint_path, chunks)
 
-        for i in tqdm(
-            range(0, len(chunks), batch_size),
-            desc="Building FAISS"
+        batch_starts = range(len(self.chunk_ids), len(chunks), batch_size)
+        for batch_number, i in enumerate(
+            tqdm(batch_starts, desc="Building FAISS"),
+            start=1,
         ):
 
             batch = chunks[i:i + batch_size]
@@ -93,6 +180,10 @@ class FaissStore:
                 chunk.chunk_id
                 for chunk in batch
             )
+            if checkpoint_path is not None and (
+                batch_number % checkpoint_every_batches == 0 or i + len(batch) == len(chunks)
+            ):
+                self._write_checkpoint(Path(checkpoint_path), chunks)
 
     def search(
         self,
@@ -160,6 +251,7 @@ class FaissStore:
         )
         faiss.write_index(self.index, str(index_path))
         manifest.write(manifest_path)
+        self._remove_checkpoint()
 
     def load(
         self,

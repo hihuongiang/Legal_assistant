@@ -19,6 +19,8 @@ DEFAULT_CHUNKS_PATH = PROCESSED_DIR / "effective_legal_chunks.json"
 DEFAULT_INDEX_PATH = PROCESSED_DIR / "effective_legal_chunks.faiss"
 DEFAULT_MANIFEST_PATH = PROCESSED_DIR / "effective_legal_chunks.manifest.json"
 DEFAULT_CORPUS_MANIFEST_PATH = PROCESSED_DIR / "effective_legal_corpus.manifest.json"
+DEFAULT_CHECKPOINT_PATH = PROCESSED_DIR / "effective_legal_chunks.partial.faiss"
+DEFAULT_CHECKPOINT_EVERY_BATCHES = 64
 DenseEmbedder = None
 
 
@@ -57,13 +59,21 @@ def build_index(
     index_path: str | Path = DEFAULT_INDEX_PATH,
     manifest_path: str | Path = DEFAULT_MANIFEST_PATH,
     corpus_manifest_path: str | Path = DEFAULT_CORPUS_MANIFEST_PATH,
+    checkpoint_path: str | Path = DEFAULT_CHECKPOINT_PATH,
+    checkpoint_every_batches: int = DEFAULT_CHECKPOINT_EVERY_BATCHES,
     *,
     allow_non_processed: bool = False,
 ) -> int:
     """Build and persist an index and its corpus-bound JSON manifest."""
-    paths = [Path(chunks_path), Path(index_path), Path(manifest_path), Path(corpus_manifest_path)]
+    paths = [
+        Path(chunks_path),
+        Path(index_path),
+        Path(manifest_path),
+        Path(corpus_manifest_path),
+        Path(checkpoint_path),
+    ]
     _validate_processed_paths(paths, allow_non_processed)
-    chunks_path, index_path, manifest_path, corpus_manifest_path = paths
+    chunks_path, index_path, manifest_path, corpus_manifest_path, checkpoint_path = paths
     as_of_date = _read_corpus_as_of(corpus_manifest_path)
     chunks = load_chunks(chunks_path)
 
@@ -73,7 +83,11 @@ def build_index(
 
     embedder = embedder_factory()
     store = FaissStore(embedder)
-    store.build_index(chunks)
+    store.build_index(
+        chunks,
+        checkpoint_path=checkpoint_path,
+        checkpoint_every_batches=checkpoint_every_batches,
+    )
     index_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     store.save(index_path, manifest_path, chunks, as_of_date=as_of_date)
@@ -87,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--index", default=str(DEFAULT_INDEX_PATH))
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST_PATH))
     parser.add_argument("--corpus-manifest", default=str(DEFAULT_CORPUS_MANIFEST_PATH))
+    parser.add_argument("--checkpoint-path", default=str(DEFAULT_CHECKPOINT_PATH))
+    parser.add_argument("--checkpoint-every-batches", type=int, default=DEFAULT_CHECKPOINT_EVERY_BATCHES)
     parser.add_argument("--allow-non-processed", action="store_true")
     arguments = parser.parse_args(argv)
     try:
@@ -95,6 +111,8 @@ def main(argv: list[str] | None = None) -> int:
             index_path=arguments.index,
             manifest_path=arguments.manifest,
             corpus_manifest_path=arguments.corpus_manifest,
+            checkpoint_path=arguments.checkpoint_path,
+            checkpoint_every_batches=arguments.checkpoint_every_batches,
             allow_non_processed=arguments.allow_non_processed,
         )
     except (CorpusValidationError, IndexValidationError, FileNotFoundError, OSError, ValueError) as error:
